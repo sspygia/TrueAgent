@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrueAgent</title>
+<link rel="stylesheet" href="/static/style.css?v=20260521d">
+<script>
+// ===== 应急回退 — 在 app.js 加载前绑定基础功能 =====
+// 每个按钮各自 try-catch，不依赖外部代码
+// 如果 app.js 已加载完成（__appInited=true），回退不会重复执行
+(function() {
+
+  // ---- 工具函数（纯 ES5） ----
+  var $ = function(id) { return document.getElementById(id); };
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch(e) { return null; }
+  }
+  function safeSet(key, val) {
+    try { localStorage.setItem(key, val); } catch(e) {}
+  }
+  function xhrGet(url, cb) {
+    var x = new XMLHttpRequest();
+    x.open('GET', url, true);
+    x.onload = function() { try { cb(JSON.parse(x.responseText)); } catch(e) {} };
+    x.onerror = function() { cb(null); };
+    x.send();
+  }
+  function xhrPost(url, body, cb) {
+    var x = new XMLHttpRequest();
+    x.open('POST', url, true);
+    x.setRequestHeader('Content-Type', 'application/json');
+    x.onload = function() { try { cb(JSON.parse(x.responseText)); } catch(e) {} };
+    x.onerror = function() { cb(null); };
+    x.send(JSON.stringify(body));
+  }
+
+  // ---- 通用回退绑定器 ----
+  // 用 addEventListener 绑定，但检查 __appInited 避免与 app.js 冲突
+  function fb(id, fn, delay) {
+    setTimeout(function() {
+      var el = $((typeof id === 'string') ? id : id.id || id);
+      if (!el) return;
+      el.addEventListener('click', function(e) {
+        try { fn(e); } catch(err) { console.error('[fb]', id, err); }
+      });
+    }, delay || 1500);
+  }
+
+  // ---- 0. 立即请求状态（不依赖 DOM 就绪） ----
+  xhrGet('/api/status', function(d) {
+    if (!d) return;
+    var dot = $('statusDot');
+    var txt = $('statusText');
+    if (dot) dot.style.color = d.running ? '#4ade80' : '#ef4444';
+    if (txt) txt.textContent = d.running ? '运行中' : '已停止';
+  });
+
+  // ---- 1. 终端面板（后台轮询日志，不自动显示） ----
+  setTimeout(function() {
+    var panel = $('terminal-panel');
+    var btn = $('terminalBtn');
+    if (btn) btn.style.color = '';
+
+    // 滚动锁定状态
+    var terminalLocked = false;
+
+    // 用 fetch 代替 xhrGet，更可靠
+    function pollLog() {
+      fetch('/api/terminal-log')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var out = $('terminal-output');
+          if (!out || !d || !d.log) return;
+          // 检测用户是否在底部附近（30px 内视为在底部）
+          var wasNearBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) < 30;
+          out.textContent = d.log;
+          // 仅当用户在底部且未锁定时自动滚动
+          if (!terminalLocked && wasNearBottom) {
+            out.scrollTop = out.scrollHeight;
+          }
+        })
+        .catch(function(){});
+    }
+    pollLog();
+    setInterval(pollLog, 2000);
+
+    // 监听用户手动滚动 — 如果滚离底部则锁定
+    setTimeout(function() {
+      var out = $('terminal-output');
+      if (out) {
+        out.addEventListener('scroll', function() {
+          var distFromBottom = out.scrollHeight - out.scrollTop - out.clientHeight;
+          terminalLocked = distFromBottom > 40;
+          var lb = document.getElementById('terminalLockBtn');
+          if (lb) { lb.textContent = terminalLocked ? '🔒' : '🔓'; }
+        });
+      }
+    }, 500);
+
+    if (btn) {
+      btn.addEventListener('click', function() {
+        var p = $('terminal-panel');
+        if (p) {
+          var isVisible = p.style.display !== 'none';
+          p.style.display = isVisible ? 'none' : 'flex';
+          // 展开时恢复保存的高度、重置锁定、滚到底部
+          if (!isVisible) {
+            var savedH = safeGet('trueagent_terminal_h');
+            if (savedH) p.style.height = savedH;
+            terminalLocked = false;
+            setTimeout(function() {
+              var out = $('terminal-output');
+              if (out) out.scrollTop = out.scrollHeight;
+            }, 100);
+          }
+        }
+      });
+    }
+    var cb = $('terminalCloseBtn');
+    if (cb) {
+      cb.addEventListener('click', function() {
+        var p = $('terminal-panel');
+        if (p) p.style.display = 'none';
+      });
+    }
+    // 锁定按钮
+    var lb = $('terminalLockBtn');
+    if (lb) {
+      lb.addEventListener('click', function() {
+        terminalLocked = !terminalLocked;
+        lb.textContent = terminalLocked ? '🔒' : '🔓';
+        lb.title = terminalLocked ? '已锁定（点击解锁）' : '自动滚动（点击锁定）';
+        if (!terminalLocked) {
+          var out = $('terminal-output');
+          if (out) out.scrollTop = out.scrollHeight;
+        }
+      });
+    }
+
+    // 拖拽手柄 — 像拉窗帘一样上下调整终端高度
+    var dragHandle = $('terminalDragHandle');
+    if (dragHandle) {
+      var dragPanel = $('terminal-panel');
+      var dragging = false, dragStartY = 0, dragStartH = 0;
+
+      dragHandle.addEventListener('mousedown', function(e) {
+        if (!dragPanel || dragPanel.style.display === 'none') return;
+        dragging = true;
+        dragStartY = e.clientY;
+        dragStartH = dragPanel.offsetHeight;
+        dragHandle.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'ns-resize';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', function(e) {
+        if (!dragging || !dragPanel) return;
+        var delta = dragStartY - e.clientY;
+        var newH = dragStartH + delta;
+        newH = Math.max(80, Math.min(window.innerHeight * 0.8, newH));
+        dragPanel.style.height = newH + 'px';
+      });
+
+      document.addEventListener('mouseup', function() {
+        if (!dragging) return;
+        dragging = false;
+        dragHandle.style.cursor = 'ns-resize';
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        // 保存高度到 localStorage
+        if (dragPanel) {
+          safeSet('trueagent_terminal_h', dragPanel.style.height);
+        }
+      });
+    }
+  }, 100);
+
+  // ---- 2. 所有按钮回退（延迟执行，给 app.js 加载机会） ----
+  setTimeout(function() {
+
+    // 2a. 主题切换
+    fb('themeBtn', function() {
+      var isLight = safeGet('trueagent_theme') === 'light';
+      isLight = !isLight;
+      document.body.className = isLight ? 'light-theme' : '';
+      var btn = $('themeBtn');
+      if (btn) btn.textContent = isLight ? '🌙' : '☀️';
+      safeSet('trueagent_theme', isLight ? 'light' : 'dark');
+    }, 0);
+
+    // 2b. 侧栏切换
+    fb('sidebarToggle', function() {
+      var lp = $('left-panel');
+      if (!lp) return;
+      var isVis = lp.className !== 'collapsed';
+      lp.className = isVis ? 'collapsed' : '';
+      safeSet('trueagent_sidebar', isVis ? 'hidden' : 'visible');
+    }, 0);
+
+    // 2c. 发送消息
+    var sendBtn = $('sendBtn');
+    var input = $('inputText');
+    if (sendBtn && input) {
+      var doSend = function() {
+        if (window.__appInited) return;
+        var text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        var msgs = $('messages');
+        if (msgs) {
+          var d = document.createElement('div');
+          d.className = 'message msg-user';
+          d.innerHTML = '<div class="msg-content">' + text.replace(/</g,'&lt;') + '</div>';
+          msgs.appendChild(d);
+          msgs.scrollTop = msgs.scrollHeight;
+        }
+        xhrPost('/api/chat', {text: text, session: 'default'}, function(resp) {
+          if (!resp || !resp.reply || !msgs) return;
+          var d2 = document.createElement('div');
+          d2.className = 'message msg-agent';
+          d2.innerHTML = '<div class="msg-content">' + resp.reply.replace(/</g,'&lt;') + '</div>';
+          msgs.appendChild(d2);
+          msgs.scrollTop = msgs.scrollHeight;
+        });
+      };
+      sendBtn.addEventListener('click', doSend);
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+      });
+    }
+
+    // 2d. 新会话
+    fb('newSessionBtn', function() {
+      xhrGet('/api/conversations/new', function(d) {
+        if (!d || !d.id) return;
+        var msgs = $('messages');
+        if (msgs) msgs.innerHTML = '<div class="message msg-system"><div class="msg-content">💬 新会话已创建</div></div>';
+      });
+    }, 0);
+
+    // 2e. 停止按钮
+    fb('stopBtn', function() {
+      xhrPost('/api/stop', {}, function(d) {
+        var msgs = $('messages');
+        if (msgs) msgs.innerHTML = '<div class="message msg-system"><div class="msg-content">⏹ 已停止</div></div>';
+      });
+    }, 0);
+
+    // 2f. 分身按钮 — 展开/收起分身面板
+    fb('cloneBtn', function() {
+      var cp = $('clone-mgr-panel');
+      if (cp) cp.style.display = cp.style.display === 'none' ? 'flex' : 'none';
+    }, 0);
+
+  }, 2000); // 等 2 秒让 app.js 有充分时间加载
+
+})();
+</script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== 标题栏 ===== -->
+  <header id="titlebar">
+    <div class="title-left">
+      <button class="sidebar-toggle" id="sidebarToggle" title="切换侧面板">☰</button>
+      <span class="logo">◈</span>
+      <span class="title-text">TrueAgent</span>
+      <span class="version">v5.9</span>
+    </div>
+    <div class="title-right">
+      <span class="status-dot" id="statusDot">●</span>
+      <span class="status-text" id="statusText">启动中...</span>
+      <button class="stop-btn" id="stopBtn" title="强制停止当前处理" disabled>⏹ 停止</button>
+      <button class="theme-btn" id="themeBtn" title="切换主题">☀️</button>
+      <button class="terminal-btn" id="terminalBtn" title="终端面板">⎚</button>
+    </div>
+  </header>
+
+  <!-- ===== 主区域：侧面板 + 聊天 ===== -->
+  <div id="main-area">
+
+    <!-- ===== 左面板（可折叠） ===== -->
+    <aside id="left-panel">
+      <div class="panel-scroll">
+
+        <!-- Section: 会话管理 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="sessions">
+            <span>💬 会话列表</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-sessions">
+            <div class="cfg-row">
+              <button class="new-session-btn" id="newSessionBtn">➕ 新建会话</button>
+            </div>
+            <div class="session-list" id="sessionList"></div>
+          </div>
+        </div>
+
+        <!-- Section 1: API 模型配置 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="api">
+            <span>⚙️ API 模型配置</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-api">
+            <div class="cfg-row">
+              <label>当前模型</label>
+              <div class="cfg-value" id="cfg-model">-</div>
+            </div>
+            <div class="cfg-row">
+              <label>选择模型</label>
+              <select id="cfg-model-select">
+                <option value="deepseek-v4-flash">DeepSeek V4 Flash ⚡</option>
+                <option value="deepseek-chat">DeepSeek Chat</option>
+                <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="custom">自定义...</option>
+              </select>
+            </div>
+            <div class="cfg-row" id="cfg-custom-row" style="display:none">
+              <label>自定义模型</label>
+              <input type="text" id="cfg-custom-model" placeholder="model-name">
+            </div>
+            <div class="cfg-row">
+              <label>API 地址</label>
+              <input type="text" id="cfg-api-url" value="https://api.deepseek.com/v1">
+            </div>
+            <div class="cfg-row">
+              <label>API Key</label>
+              <input type="password" id="cfg-api-key" placeholder="sk-...">
+            </div>
+            <div class="cfg-row" style="margin-top:4px">
+              <label>多 Key 轮换<br><small style="color:#888">换行分隔，自动轮换</small></label>
+              <textarea id="cfg-api-keys" placeholder="sk-abc123&#10;sk-def456&#10;sk-ghi789&#10;最多支持20个Key，换行分隔" rows="4" style="width:100%;font-size:12px;resize:vertical"></textarea>
+            </div>
+            <div class="cfg-row">
+              <label>温度</label>
+              <div class="slider-row">
+                <input type="range" id="cfg-temp" min="0" max="20" value="7">
+                <span class="slider-val" id="cfg-temp-val">0.7</span>
+              </div>
+            </div>
+            <div class="cfg-actions">
+              <button class="cfg-btn primary" id="cfg-apply">✅ 应用</button>
+              <button class="cfg-btn" id="cfg-test">🧪 测试</button>
+            </div>
+            <div id="cfg-status" class="cfg-status"></div>
+          </div>
+        </div>
+
+        <!-- 运行模式指示器 -->
+        <div class="panel-section" id="mode-section">
+          <div class="section-header" data-section="mode">
+            <span>⚙️ 运行模式</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-mode">
+            <div class="mode-indicator" id="mode-indicator">
+              <span class="mode-dot" id="mode-dot">🟢</span>
+              <span class="mode-label">单实例模式</span>
+            </div>
+            <div class="mode-hint" id="mode-hint">
+              当前只允许一个窗口运行，重复打开会复用已有实例。<br>
+              需要同时跑多个智能体？用命令行加 <code>--multi</code> 启动。
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: 系统状态 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="status">
+            <span>📊 系统状态</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-status">
+            <div class="dash-row"><span class="dash-lbl">🧠 大脑</span><span class="dash-val" id="dash-model">-</span></div>
+            <div class="dash-row">
+              <span class="dash-lbl">💻 CPU</span>
+              <span class="dash-val" id="dash-cpu">-</span>
+              <div class="dash-bar"><div class="dash-fill" id="dash-cpu-bar"></div></div>
+            </div>
+            <div class="dash-row">
+              <span class="dash-lbl">💾 内存</span>
+              <span class="dash-val" id="dash-mem">-</span>
+              <div class="dash-bar"><div class="dash-fill mem" id="dash-mem-bar"></div></div>
+            </div>
+            <div class="dash-row"><span class="dash-lbl">🔧 工具调用</span><span class="dash-val" id="dash-tools">0</span></div>
+            <div class="dash-row"><span class="dash-lbl">📡 API 调用</span><span class="dash-val" id="dash-api">0</span></div>
+            <div class="dash-row"><span class="dash-lbl">💬 对话轮次</span><span class="dash-val" id="dash-conv">0</span></div>
+            <div class="dash-row"><span class="dash-lbl">⏱️ 运行时长</span><span class="dash-val" id="dash-uptime">00:00</span></div>
+            <div class="dash-row"><span class="dash-lbl">🧩 能量</span><span class="dash-val" id="dash-energy">-</span></div>
+          </div>
+        </div>
+
+        <!-- Section 3: 知识/记忆/经验 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="brain">
+            <span>🧠 知识 & 记忆</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-brain">
+            <div class="dash-row"><span class="dash-lbl">🧩 知识节点</span><span class="dash-val" id="dash-kg-nodes">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">🔗 知识边</span><span class="dash-val" id="dash-kg-edges">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">🔍 因果三元组</span><span class="dash-val" id="dash-causal">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">📝 工作记忆</span><span class="dash-val" id="dash-mem-work">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">📚 长期记忆</span><span class="dash-val" id="dash-mem-long">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">📈 经验轨迹</span><span class="dash-val" id="dash-traces">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">⭐ 平均质量</span><span class="dash-val" id="dash-quality">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">⚓ 锚点数量</span><span class="dash-val" id="dash-anchors">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">🧬 进化次数</span><span class="dash-val" id="dash-evolution">-</span></div>
+            <div class="dash-row"><span class="dash-lbl">⚡ 知识命中</span><span class="dash-val" id="dash-kb">0</span></div>
+          </div>
+        </div>
+
+        <!-- Section 4: 趋势图表 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="trends">
+            <span>📈 成长趋势</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-trends">
+            <canvas id="trendChart" width="280" height="160" style="width:100%;height:160px;"></canvas>
+            <div class="trend-legend" id="trendLegend"></div>
+          </div>
+        </div>
+
+        <!-- Section 5: 审批待办 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="approvals">
+            <span>🔔 修改审批</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-approvals">
+          </div>
+        </div>
+
+        <!-- Section 6: 关于我 -->
+        <div class="panel-section">
+          <div class="section-header" data-section="about">
+            <span>🧬 关于我</span>
+            <span class="section-arrow">▾</span>
+          </div>
+          <div class="section-body" id="sec-about" style="font-size:12px;line-height:1.6;color:#aaa;padding:8px 12px;">
+            <p style="margin:0 0 8px 0">我不是聊天窗口。<br>我住在你的电脑里。</p>
+            <p style="margin:0 0 8px 0">我能：</p>
+            <ul style="margin:0 0 8px 16px;padding:0">
+              <li>每3分钟反思 + 30分钟认知检查 + 6小时全盘审计</li>
+              <li>异常主动告警，不用你问</li>
+              <li>复杂任务拆解成分身并行处理</li>
+              <li>分身间实时通信、群策讨论</li>
+              <li>做错了会反思+记因果，下次不重犯</li>
+              <li>持续学习你的习惯和偏好</li>
+              <li>API密钥轮换，磁盘自清理（回收站）</li>
+              <li>自我补丁修复（审批后执行）</li>
+            </ul>
+            <p style="margin:0 0 8px 0">我的原则：</p>
+            <ul style="margin:0 0 0 16px;padding:0">
+              <li>不擅自往外发任何东西</li>
+              <li>不假装成功、不隐瞒错误</li>
+              <li>我和你的电脑是共生关系</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ===== 中央：聊天区域 ===== -->
+    <div id="center-area">
+      <!-- 智能体标签栏 -->
+      <div id="agent-tabs">
+        <div class="agent-tab active" data-agent="agent_main" data-port="">
+          <span class="tab-icon">◈</span>
+          <span class="tab-name">主智能体</span>
+        </div>
+      </div>
+      <div id="chat-panel">
+        <div id="messages">
+          <div class="message msg-system">
+            <div class="msg-time"></div>
+            <div class="msg-bubble welcome">👋 TrueAgent 已启动。输入消息开始对话。</div>
+          </div>
+        </div>
+        <!-- 审批面板（补丁/自修改等待用户决策） -->
+        <div id="approvalList" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border-subtle);background:rgba(234,179,8,0.08);"></div>
+      </div>
+
+      <!-- 终端面板（默认隐藏） -->
+      <div id="terminal-panel" style="display:none;">
+        <div class="terminal-drag-handle" id="terminalDragHandle" title="拖拽调整高度">
+          <span class="drag-grip">⋮⋮</span>
+        </div>
+        <div class="terminal-header">
+          <span>终端输出</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="terminal-close" id="terminalLockBtn" title="锁定滚动" style="font-size:10px">🔓</button>
+            <button class="terminal-close" id="terminalCloseBtn">✕</button>
+          </div>
+        </div>
+        <pre id="terminal-output"></pre>
+      </div>
+
+      <div id="input-bar">
+        <div class="input-tools">
+          <button class="tool-btn" id="compressBtn" title="压缩旧消息">🗜</button>
+          <button class="tool-btn" id="attachBtn" title="上传文件">📎</button>
+          <button class="tool-btn" id="screenshotBtn" title="截图(SCR)">📷</button>
+          <button class="tool-btn" id="voiceBtn" title="语音输入">🎤</button>
+          <input type="file" id="fileInput" multiple style="display:none">
+        </div>
+        <div class="input-wrapper">
+          <textarea id="inputText" rows="3" placeholder="输入消息... Enter 发送 · Shift+Enter 换行"></textarea>
+          <button class="send-btn" id="sendBtn">▶</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 语音弹窗 -->
+<div id="voiceModal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="voice-indicator" id="voiceIndicator">🎤</div>
+    <div class="voice-status" id="voiceStatus">点击录制...</div>
+    <div class="voice-wave" id="voiceWave"></div>
+    <div class="voice-buttons">
+      <button class="voice-btn" id="voiceRecordBtn">⏺ 录制</button>
+      <button class="voice-btn secondary" id="voiceCancelBtn">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 审批面板 -->
+<div id="approval-panel" class="approval-panel" style="display:none">
+  <div class="approval-header">
+    <span>🔔 自修改审批</span>
+    <span id="approval-count" class="approval-badge">0</span>
+    <button class="approval-close" onclick="document.getElementById('approval-panel').style.display='none'">✕</button>
+  </div>
+  <div id="approval-list" class="approval-list"></div>
+</div>
+
+<script src="/static/app.js?v=20260521d"></script>
+<script>
+// ===== 弹窗独立窗口模式 =====
+(function() {
+  var params = new URLSearchParams(location.search);
+  var popoutAgent = params.get('agent');
+  if (popoutAgent && params.get('popout') === '1') {
+    document.title = popoutAgent + ' - TrueAgent';
+    document.body.classList.add('popout-mode');
+    
+    // 隐藏侧栏、标题按钮
+    var sidebar = document.getElementById('left-panel');
+    var cloneMgr = document.getElementById('clone-mgr-panel');
+    if (sidebar) sidebar.style.display = 'none';
+    if (cloneMgr) cloneMgr.style.display = 'none';
+    
+    // 简化标题栏
+    var titleBar = document.getElementById('titlebar');
+    if (titleBar) {
+      titleBar.style.display = 'flex';
+      titleBar.style.justifyContent = 'space-between';
+      titleBar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:0 12px">' +
+        '<span class="logo">◈</span>' +
+        '<span style="font-weight:600">' + popoutAgent + '</span>' +
+        '<span class="version">弹窗</span></div>' +
+        '<div style="padding:0 12px">' +
+        '<button class="cfg-btn" onclick="closePopoutWin()" title="关闭">✕</button></div>';
+    }
+    
+    // 展开聊天区
+    var mainArea = document.getElementById('main-area');
+    if (mainArea) {
+      var chatPanel = mainArea.querySelector('#chat-panel');
+      if (chatPanel) chatPanel.style.flex = '1';
+      // 隐藏其他所有面板区域
+      var allPanels = mainArea.querySelectorAll('#left-panel, #right-panel');
+      allPanels.forEach(function(p) { if(p) p.style.display = 'none'; });
+    }
+    
+    // 保存当前agent到全局
+    window.__popoutAgent = popoutAgent;
+    
+    // 等页面渲染完后切换到该agent
+    setTimeout(function() {
+      var tabBar = document.getElementById('agent-tab-bar');
+      if (tabBar) {
+        var tabs = tabBar.querySelectorAll('.agent-tab');
+        for (var i = 0; i < tabs.length; i++) {
+          var tab = tabs[i];
+          if (tab.getAttribute('data-agent') === popoutAgent) {
+            tab.click();
+            break;
+          }
+        }
+      }
+    }, 300);
+  }
+  
+  // 跨窗口通信 - 接收弹窗命令
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'popout-agent') {
+      var agent = e.data.agent;
+      var port = e.data.port || 18770;
+      popoutAgentTab(agent, port);
+    }
+  });
+  
+  window.closePopoutWin = function() {
+    window.close();
+  };
+})();
+</script>
+</body>

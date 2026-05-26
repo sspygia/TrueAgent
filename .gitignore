@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.bak
+*.bak2
+*.serverbak
+*.tmp
+*.fixed
+*.pre_dedup
+*.pre_fix_bak
+*.dedup_bak
+*.step2_bak
+*.npz
+
+# 构建产物
+dist/
+build/
+*.spec
+tcl8.6/
+tk8.6/
+
+# 隐私数据 — 不上传
+data/api_config.json
+data/memories/
+data/diary/
+data/reflections/
+data/causal/
+data/clones/
+data/proposals/
+data/backups/
+data/audits/
+data/.junk_bin/
+data/cache/
+data/instance_*
+data/logs/
+data/conversations/
+data/outputs/
+data/skills/
+data/config.json
+data/trend_history.json
+data/task_engine/
+data/task_orchestrator/
+data/textures/
+data/references/
+data/learning/
+data/patches/
+data/ocr_config.json
+
+# 知识库太大 — 仅保留种子
+data/knowledge/xiaoxia_knowledge_docs/
+data/knowledge/knowledge_graph.json
+data/knowledge/knowledge_graph_causal.json
+data/knowledge/causal_chain.json
+data/knowledge/expansion-*.md
+data/knowledge/ref_comparison_report.md
+data/knowledge/real_vs_cg_analysis.md
+data/knowledge/scene_composition_analysis.md
+data/knowledge/caption_analysis.md
+data/knowledge/bio_vision_principles.md
+data/knowledge/user_library_learning_batch.json
+
+# 种子数据保留（展示数据层结构用）
+!data/seed/
+
+# 调试文件
+webui/_*.py
+webui/_*.txt
+webui/*.txt
+webui/server_tail.txt
+
+# 临时与调试
+*.log
+__*.py
+clone_files.log
+corruption_cleanup.log
+gui_error.log
+
+# 系统文件
+*.lnk
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# 环境
+.env
+venv/
+output/

@@ -1,0 +1,57 @@
+[
+  {
+    "id": "seed_001",
+    "type": "learning",
+    "text": "TrueAgent 的 WebUI 基于 FastAPI + 原生 HTML/CSS/JS，端口由 find_free_port() 自动分配。",
+    "importance": 0.9,
+    "timestamp": 1779736922.2653005,
+    "tags": [
+      "架构",
+      "WebUI"
+    ]
+  },
+  {
+    "id": "seed_002",
+    "type": "learning",
+    "text": "用户习惯直接说'继续'而非重新描述任务——期望 Agent 从上下文推断并自动续接。",
+    "importance": 0.85,
+    "timestamp": 1779736922.2653005,
+    "tags": [
+      "用户偏好",
+      "交互"
+    ]
+  },
+  {
+    "id": "seed_003",
+    "type": "learning",
+    "text": "修改核心文件前必须先备份到 backups/ 目录。血的教训：批量文本替换在复杂 Python 代码上必然出边界 bug。",
+    "importance": 0.95,
+    "timestamp": 1779736922.2653005,
+    "tags": [
+      "安全",
+      "教训"
+    ]
+  },
+  {
+    "id": "seed_004",
+    "type": "learning",
+    "text": "spawn_clone 工具可将耗时任务分派到独立 Python 进程并行执行，结果通过 partial.json 心跳回传。",
+    "importance": 0.8,
+    "timestamp": 1779736922.2653005,
+    "tags": [
+      "工具",
+      "并行"
+    ]
+  },
+  {
+    "id": "seed_005",
+    "type": "learning",
+    "text": "GBK 编码在 Windows 中文系统上会导致 subprocess 输出乱码崩溃——必须显式指定 encoding='utf-8'。",
+    "importance": 0.9,
+    "timestamp": 1779736922.2653005,
+    "tags": [
+      "编码",
+      "Windows"
+    ]
+  }
+]

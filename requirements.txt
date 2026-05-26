@@ -1,0 +1,26 @@
+﻿# TrueAgent Hyper v4.0 — 完整依赖
+# 安装: pip install -r requirements.txt
+#
+# === 核心依赖（缺失则核心功能不可用）===
+openai>=1.0.0           # LLM API 调用（DeepSeek/GPT 等）
+requests>=2.25.0        # HTTP 请求（网页抓取、API 调用）
+psutil>=5.8.0           # 系统资源监控（CPU/内存/进程）
+numpy>=1.20.0           # 数值计算（向量/矩阵运算）
+networkx>=2.5           # 知识图谱（图结构存储与推理）
+fastapi>=0.100.0        # Web 框架（WebUI 后端）
+uvicorn>=0.20.0         # ASGI 服务器（运行 WebUI）
+beautifulsoup4>=4.12.0  # HTML 解析（网页内容提取)
+
+# === 扩展依赖（缺失则对应功能降级）===
+Pillow>=10.0.0          # 图像处理（截图分析、OCR 预处理）
+pywin32>=300            # Windows API（窗口管理、系统托盘）
+playwright>=1.40.0      # 浏览器自动化（网页交互、截图）
+sentence-transformers>=2.2.0  # 语义搜索（记忆/因果检索）
+websockets>=12.0        # WebSocket 通信（实时推送）
+scipy>=1.10.0           # 科学计算（统计分析、信号处理）
+pyperclip>=1.8.0        # 剪贴板操作（复制粘贴）
+openai-whisper>=20231117  # 语音识别（音频转文字）
+soundfile>=0.12.0       # 音频文件读写（WAV/FLAC 等）
+
+# === 可选依赖（按需安装）===
+# llama-cpp-python       # 本地 LLM 推理（需 C++ 编译器，纯 CPU）
