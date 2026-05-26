@@ -10,7 +10,7 @@ echo ============================================
 :: Launch with VBS hidden window
 set VBS=%TEMP%\trueagent_launch.vbs
 echo Set WshShell = CreateObject("WScript.Shell") > "%VBS%"
-echo WshShell.Run """pythonw"" -u webui\server.py", 0, False >> "%VBS%"
+echo WshShell.Run """python"" -u webui\server.py", 0, False >> "%VBS%"
 cscript //nologo "%VBS%"
 del "%VBS%"
 

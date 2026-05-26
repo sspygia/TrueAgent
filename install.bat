@@ -8,47 +8,45 @@ echo ============================================
 echo.
 
 :: 1. 检查 Python
-echo [1/4] 检查 Python...
+echo [1/4] Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [FAIL] 未找到 Python，请先安装 Python 3.10+
-    echo         下载: https://www.python.org/downloads/
+    echo [FAIL] Python not found. Please install Python 3.10+
+    echo        https://www.python.org/downloads/
     pause
     exit /b 1
 )
 python --version
 echo.
 
-:: 2. 安装依赖
-echo [2/4] 安装依赖...
-pip install -r requirements.txt -q
+:: 2. 安装依赖 (using python -m pip for reliability)
+echo [2/4] Installing dependencies...
+python -m pip install -r requirements.txt -q
 if errorlevel 1 (
-    echo [FAIL] 依赖安装失败，请检查网络连接
+    echo [FAIL] Dependency installation failed. Check your network.
+    echo        Try: python -m pip install -r requirements.txt
     pause
     exit /b 1
 )
-echo [OK] 依赖安装完成
+echo [OK] Dependencies installed
 echo.
 
 :: 3. 初始化数据目录
-echo [3/4] 初始化数据目录...
+echo [3/4] Initializing data directories...
 if not exist "data" mkdir data
 if not exist "data\cache" mkdir data\cache
 if not exist "data\outputs" mkdir data\outputs
 if not exist "data\backups" mkdir data\backups
-echo [OK] 数据目录就绪
+echo [OK] Data directories ready
 echo.
 
-:: 4. 启动
-echo [4/4] 启动 TrueAgent...
+:: 4. 提示下一步
+echo [4/4] Ready to start!
 echo.
-echo   首次启动会自动引导你输入 API Key
-echo   浏览器将自动打开: http://127.0.0.1:18765
-echo.
-echo   按 Ctrl+C 停止
+echo   To launch: double-click 启动TrueAgent_WebUI.bat
+echo   First launch: enter your DeepSeek API Key (get one at https://platform.deepseek.com)
+echo   Browser will open at: http://127.0.0.1:18765
 echo ============================================
 echo.
-
-start "" pythonw.exe -u webui\server.py
-timeout /t 3 >nul
+pause
 exit /b 0

@@ -89,3 +89,4 @@ desktop.ini
 .env
 venv/
 output/
+data/server.pid
