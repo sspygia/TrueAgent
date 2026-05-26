@@ -12,7 +12,9 @@ import os, json
 import numpy as np
 from PIL import Image
 
-TEXTURE_DIR = r'D:\Ai电脑智能体\v5.9\data\textures'
+_EXT_DIR = os.path.dirname(os.path.abspath(__file__))
+_BASE_DIR = os.path.dirname(_EXT_DIR)
+TEXTURE_DIR = os.path.join(_BASE_DIR, 'data', 'textures')
 os.makedirs(TEXTURE_DIR, exist_ok=True)
 
 

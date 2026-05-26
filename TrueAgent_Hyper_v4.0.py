@@ -120,8 +120,8 @@ def _resolve_api_key():
                     return _custom_key
         except Exception:
             pass
-    # 3. Default Key (main instance)
-    return "sk-12a393b7c8704025a1e96a623848a6f0"
+    # 3. Default Key — 占位符，启动时从 WebUI 或环境变量覆盖
+    return "sk-your-deepseek-api-key-here"
 
 CONFIG = {
     "llm": {
@@ -129,7 +129,7 @@ CONFIG = {
         "use_direct_api": True,    # Direct call DeepSeek API
         "direct_api_base_url": "https://api.deepseek.com",
         "direct_api_model": "deepseek-v4-flash",
-        "direct_api_key": "sk-12a393b7c8704025a1e96a623848a6f0",  # 占位，下面会被覆盖
+        "direct_api_key": "sk-your-deepseek-api-key-here",  # 占位，启动时从 WebUI 或环境变量覆盖
         "model_path": "models/phi-3-mini-4k-instruct-q4.gguf",
         "context_length": 2048,
         "temperature": 0.7,
@@ -1519,7 +1519,8 @@ class LLMWrapper:
         parts.append("")
 
         parts.append("=== 数据位置 ===")
-        parts.append("你的所有数据都在 D:\\Ai电脑智能体\\v5.9\\ 下：")
+        _prj_dir = os.path.dirname(os.path.abspath(__file__))
+        parts.append(f"你的所有数据都在 {_prj_dir}\\ 下：")
         parts.append("  data/conversations/     -> chat records (.jsonl)")
         parts.append("  data/memories/          <- 记忆/画像/因果/轨迹")
         parts.append("  data/knowledge/         <- 知识图谱/锚点库/扩展知识")
@@ -5789,8 +5790,12 @@ class CodeContinuationManager:
         # 1d. 执行轨迹经验（过往代码生成任务的成败记录）
         try:
             trace_path = None
-            for p in [r'D:\Ai电脑智能体\v5.9\data\memories\execution_trace.jsonl',
-                      r'D:\Ai电脑智能体\v5.9\data\memories\execution_traces.jsonl']:
+            _mem_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'memories')
+            for fn in ['execution_trace.jsonl', 'execution_traces.jsonl']:
+                p = os.path.join(_mem_dir, fn)
+                if os.path.exists(p):
+                    trace_path = p
+                    break
                 if os.path.exists(p):
                     trace_path = p
                     break
@@ -8085,7 +8090,8 @@ CPU占用Top: {d.get('top_cpu', [])}
             log_errors = ""
             try:
                 import glob as _gg
-                log_files = sorted(_gg.glob(r'D:\Ai电脑智能体\v5.9\logs\*.log'), key=os.path.getmtime, reverse=True)[:3]
+                _logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+                log_files = sorted(_gg.glob(os.path.join(_logs_dir, '*.log')), key=os.path.getmtime, reverse=True)[:3]
                 for lf in log_files:
                     with open(lf, 'r', encoding='utf-8', errors='replace') as lfh:
                         lines_lf = lfh.readlines()
@@ -8294,7 +8300,8 @@ CPU占用Top: {d.get('top_cpu', [])}
         """日志维护 + 进程内存释放"""
         try:
             import glob as _g, gc as _gc
-            logs = _g.glob(r'D:\Ai电脑智能体\v5.9\logs\*.log')
+            _logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+            logs = _g.glob(os.path.join(_logs_dir, '*.log'))
             for f in logs:
                 try:
                     sz = os.path.getsize(f)
@@ -10973,7 +10980,7 @@ except Exception as e:
 - 不要使用 Selenium、Playwright、webdriver_manager 等需要额外安装的浏览器自动化工具
 - 如果原方案需要未安装的包，改用纯 requests + BeautifulSoup 方案
 - 保持爬取目标不变：网易新闻 www.163.com 首页
-- 保存文件时必须使用 D:/Ai电脑智能体/ 下的绝对路径
+- 保存文件时必须使用项目根目录下的绝对路径（用 os.path.dirname(os.path.abspath(__file__)) 获取）
 - 代码末尾打印结果以便验证
 - 只输出完整的 Python 代码，不要解释
 
