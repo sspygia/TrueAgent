@@ -44,6 +44,8 @@ install.bat
 
 浏览器打开后填入 DeepSeek API Key，刷新即可。
 
+> 🇨🇳 国内用户如 GitHub 下载慢，可用 Gitee 镜像：https://gitee.com/sspygia/TrueAgent
+
 ## 项目结构
 
 ```
