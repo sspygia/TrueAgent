@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 # 黑板路径
 _EXT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BASE_DIR = os.path.dirname(_EXT_DIR)
+_HUB_DIR = os.path.join(_BASE_DIR, "data", "clones", "_hub")  # 统一结果中枢
 
 # ===== 级联分身的资源配额看门狗 =====
 # 每层有「允许再派生的资源上限」和「子分身的资源上限」
@@ -270,8 +271,11 @@ class CloneManager:
                     text=False,    # bytes mode
                     creationflags=_sp.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
-                info["_stderr_fp"] = _stderr_fp  # 清理时关闭
             except Exception as e:
+                try:
+                    _stderr_fp.close()
+                except Exception:
+                    pass
                 print(f"[CloneManager] 启动分身 {clone_id} 失败: {e}", flush=True)
                 return None
 
@@ -287,6 +291,7 @@ class CloneManager:
                 "result": None,
                 "result_path": "",
                 "assigned_key": assigned_key,  # 记录分配了哪把钥匙
+                "_stderr_fp": _stderr_fp,      # 清理时关闭文件句柄
             }
 
             print(f"[CloneManager] 已派遣 {clone_id} (PID={proc.pid}): {task_description[:60]}...", flush=True)
