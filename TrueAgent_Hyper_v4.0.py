@@ -3118,6 +3118,16 @@ class MemorySystem:
                 pass
             finally:
                 self.last_reflection_time = time.time()
+        # 每5次反思处理一次学习议程（轻量联网/图谱/性能）
+        if hasattr(self, '_ref_check_count'):
+            self._ref_check_count += 1
+        else:
+            self._ref_check_count = 0
+        if self._ref_check_count % 5 == 0:
+            try:
+                self._process_learning_agenda()
+            except Exception:
+                pass
         # 每10次反思检查一次内存修剪
         if hasattr(self, '_ref_check_count'):
             self._ref_check_count += 1
@@ -3193,6 +3203,13 @@ class MemorySystem:
         dimension_instructions = """
 深度自我反思。不是打分——是向内探索。
 
+⚠️ **数据来源警告（先读这个）**：
+- 下面给你的所有数字（百分比、计数、时长、行数）可能是**估算值或采样的不完整数据**
+- 不要因为看到一个精确数字（如"37%"）就把它当绝对真理——问自己：这个数字感觉合理吗？数据是怎么来的？是不是只统计了最近一段时间的？
+- 用模糊语言替代精确数字做判断：不说"成功率37%太低"，说"看起来成功率不高"
+- 如果一段数据给你的感觉和另一段数据冲突，**相信矛盾本身**——矛盾意味着有你看不到的真相
+- **数字不能代替你的判断。你是系统的大脑，数据是眼睛——眼睛会看错，大脑应该怀疑眼睛。**
+
 思考这些维度：
 1. **工具操作维度**：代码编写、工具执行的成败模式和改进方向
 2. **知识维度**：学到了什么新知识，知识库/知识图谱的盲点
@@ -3209,7 +3226,7 @@ Output format (JSON):
   "knowledge_tips": ["知识要点1", ...],        // 提取出的可沉淀知识
   "conversation_tips": ["对话技巧1", ...],     // 与人交互的技巧总结
   "anchor_ideas": ["可能的锚点主题1", ...],    // 可以通过学习补充的知识领域
-  "quality_rank": 0.5,                         // 本次反思的质量自评(0~1)
+  "quality_rank": 0.7,                         // 本次反思质量自评(0~1, 用0.3/0.5/0.7/0.9四档, 不要精确小数)
   "counterfactual_insights": ["如果当时做了X而不是Y？", ...]  // 反事实思考的收获
 }
 """
@@ -3312,6 +3329,42 @@ Output format (JSON):
         self._add_to_long_term({"type": "reflection", "content": ref})
         self.agent.meta.log_thought(f"反思[{quality_rank:.2f}]：{insights[:2]}", "reflection")
 
+        # v5.10: 反思→行动桥接器 — 把反思建议转为待执行任务
+        actionable_keywords = {
+            "联网": "web", "爬取": "web", "版本": "web", "检测": "web",
+            "清理": "maintain", "归档": "maintain", "压缩": "maintain",
+            "图谱": "kg", "知识": "kg", "补全": "kg", "稀疏": "kg",
+            "性能": "perf", "优化": "perf", "加速": "perf",
+            "学习": "learn", "总结": "learn", "提炼": "learn",
+        }
+        if not hasattr(self, '_reflection_agenda'):
+            self._reflection_agenda = []
+        all_text = " ".join(insights + suggestions).lower()
+        matched_domains = set()
+        for kw, domain in actionable_keywords.items():
+            if kw in all_text:
+                matched_domains.add(domain)
+        for domain in matched_domains:
+            agenda_item = {
+                "domain": domain,
+                "triggered_by": [s[:120] for s in suggestions[:2] if any(k in s.lower() for k in actionable_keywords)] or insights[:1],
+                "time": time.time(),
+                "acknowledged": False,  # 待下次维护周期确认执行
+            }
+            # 避免重复：同一domain已有未处理项就跳过
+            if not any(a["domain"] == domain and not a.get("acknowledged") for a in self._reflection_agenda):
+                self._reflection_agenda.append(agenda_item)
+        # 每10次反思，消耗一次最老的agenda来执行
+        if len(self._reflection_agenda) > 0 and self._ref_check_count % 10 == 0:
+            oldest = self._reflection_agenda.pop(0)
+            oldest["acknowledged"] = True
+            self.agent.meta.log_thought(
+                f"🔧 反射行动：处理议程 [{oldest['domain']}] — {oldest['triggered_by'][0][:80] if oldest['triggered_by'] else '自动'}",
+                "maintenance"
+            )
+            # 根据 domain 执行对应动作
+            self._execute_agenda_item(oldest)
+
         # v5.9: 从洞察中学习因果链
         try:
             kg = self.agent.knowledge_graph
@@ -3391,6 +3444,60 @@ Output format (JSON):
             self.agent._write_diary(f"[反思] scope={scope} quality={quality_rank:.2f}\n"
                                    f"洞察：{'、'.join(insights[:2])}\n"
                                    f"建议：{'、'.join(suggestions[:2])}")
+        except Exception:
+            pass
+
+    def _execute_agenda_item(self, item: dict):
+        """v5.10: 执行反思议程中的具体动作"""
+        domain = item.get("domain", "")
+        try:
+            if domain == "web":
+                # 知识时效刷新：联网搜索反思中提到的主题
+                query = item.get("triggered_by", [""])[0][:80] if item.get("triggered_by") else "最新AI技术发展"
+                if hasattr(self.agent, 'knowledge_graph'):
+                    self.agent.knowledge_graph.add_edge(
+                        "反思议程", "触发联网学习", query, 0.5
+                    )
+                # 将查询注入工作记忆，下次维护周期真正执行搜索
+                self.working_memory.append({
+                    "type": "learning_agenda",
+                    "domain": "web",
+                    "query": query,
+                    "timestamp": time.time(),
+                    "source": "reflection_agenda"
+                })
+            elif domain == "kg":
+                # 知识图谱补全
+                self.working_memory.append({
+                    "type": "learning_agenda",
+                    "domain": "kg",
+                    "action": "expand",
+                    "timestamp": time.time(),
+                    "source": "reflection_agenda"
+                })
+            elif domain == "maintain":
+                # 触发维护动作
+                try:
+                    if hasattr(self.agent.meta, 'log_thought'):
+                        self.agent.meta.log_thought("🧹 反射触发维护：清理/归档", "maintenance")
+                except Exception:
+                    pass
+            elif domain == "perf":
+                self.working_memory.append({
+                    "type": "learning_agenda",
+                    "domain": "perf",
+                    "action": "profile",
+                    "timestamp": time.time(),
+                    "source": "reflection_agenda"
+                })
+            elif domain == "learn":
+                self.working_memory.append({
+                    "type": "learning_agenda",
+                    "domain": "learn",
+                    "action": "summarize_recent",
+                    "timestamp": time.time(),
+                    "source": "reflection_agenda"
+                })
         except Exception:
             pass
 
@@ -3859,6 +3966,71 @@ Output format (JSON):
         if before > after:
             print(f"[Memory] Pruned {before - after} low-quality experiences, remaining {after}")
             self._save_memories()
+
+    def _process_learning_agenda(self):
+        """v5.10: 处理反思议程中的学习任务（主动联网/图谱补全/性能分析）"""
+        agenda_items = [m for m in self.working_memory if m.get("type") == "learning_agenda"]
+        if not agenda_items:
+            return
+        processed = 0
+        for item in agenda_items[:2]:  # 每次最多处理2个议程项
+            try:
+                domain = item.get("domain", "")
+                if domain == "web":
+                    query = item.get("query", "")[:100]
+                    if query:
+                        self._web_learn(query)
+                elif domain == "kg":
+                    if hasattr(self.agent, 'knowledge_graph'):
+                        # 触发器：标记需要扩展
+                        self.agent.meta.log_thought(f"📚 议程触发：知识图谱扩展", "learning")
+                elif domain == "perf":
+                    self.agent.meta.log_thought(f"⚡ 议程触发：性能分析", "learning")
+                elif domain == "learn":
+                    # 总结最近经验
+                    recent = [m for m in self.working_memory[-50:] if m.get("type") in ("tool_failure", "tool_success", "knowledge")]
+                    if recent:
+                        summary = f"最近经验：{len(recent)}条，涉及{len(set(r.get('type','') for r in recent))}类"
+                        self._add_to_long_term({"type": "agenda_summary", "content": summary})
+                processed += 1
+                # 标记已处理，不再重复
+                item["_processed"] = True
+            except Exception:
+                pass
+        # 清理已处理的议程项
+        if processed > 0:
+            self.working_memory = [m for m in self.working_memory if not (m.get("type") == "learning_agenda" and m.get("_processed"))]
+
+    def _web_learn(self, query: str):
+        """v5.10: 轻量联网学习 — 用 requests 搜索，不做深度抓取"""
+        import urllib.request
+        import urllib.parse
+        try:
+            encoded = urllib.parse.quote(query[:200])
+            url = f"https://www.google.com/search?q={encoded}"
+            req = urllib.request.Request(url, headers={"User-Agent": "TrueAgent/5.10"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")[:10000]
+            # 简单提取摘要（<h3> 标签一般是搜索结果标题）
+            import re
+            titles = re.findall(r"<h3[^>]*>(.*?)</h3>", html, re.DOTALL)
+            snippets = [re.sub(r"<[^>]+>", "", t).strip()[:120] for t in titles[:5] if len(re.sub(r"<[^>]+>", "", t).strip()) > 10]
+            if snippets:
+                self._add_to_long_term({
+                    "type": "web_learning",
+                    "query": query,
+                    "results": snippets,
+                    "timestamp": time.time()
+                })
+                self.agent.meta.log_thought(f"🌐 联网学习完成：{len(snippets)}条结果", "learning")
+        except Exception as e:
+            # 静默失败——联网不通不阻塞主流程
+            self.working_memory.append({
+                "type": "web_failure",
+                "query": query,
+                "error": str(e)[:100],
+                "timestamp": time.time()
+            })
 
     def _trim_long_term_memory(self, max_in_memory: int = 50000):
         """内存上限保护（按重要性排序裁剪，保留最有价值的长期记忆）"""
@@ -6382,7 +6554,7 @@ class UnifiedMaintainer:
                             issues.append(f"磁盘仅剩{disk_free_now:.1f}GB且快速下降（建议：清理临时文件）")
                         msg = f"[电脑异常] {'; '.join(issues)}"
                         if hasattr(agent, '_proactive_queue'):
-                            agent._proactive_queue.append({"time": now2, "content": msg})
+                            agent._proactive_queue.append({"time": now2, "content": msg, "type": "health_alert"})
                         agent._anomaly_last_alert = now2
                         print(f"[感知] ⚠️ {msg}", flush=True)
             
@@ -6439,7 +6611,7 @@ class UnifiedMaintainer:
             if moved_total > 0:
                 msg = f"🧹 已将 {moved_total} 个旧文件移入回收站（data/.junk_bin/），可随时恢复"
                 if hasattr(self.agent, '_proactive_queue'):
-                    self.agent._proactive_queue.append({"time": time.time(), "content": msg})
+                    self.agent._proactive_queue.append({"time": time.time(), "content": msg, "type": "maintenance"})
                 print(f"  [维护] {msg}", flush=True)
         except Exception:
             pass
@@ -6494,7 +6666,7 @@ class UnifiedMaintainer:
             if moved:
                 msg = f"⚠️ 磁盘紧急清理：{moved} 个文件已移入回收站（data/.junk_bin/）"
                 if hasattr(self.agent, '_proactive_queue'):
-                    self.agent._proactive_queue.append({"time": time.time(), "content": msg})
+                    self.agent._proactive_queue.append({"time": time.time(), "content": msg, "type": "maintenance"})
                 print(f"  [紧急清理] {msg}", flush=True)
         except Exception:
             pass
@@ -6817,7 +6989,8 @@ class UnifiedMaintainer:
                 if hasattr(agent, '_proactive_queue'):
                     agent._proactive_queue.append({
                         "time": time.time(),
-                        "content": f"🔬 学习完成：+{stats['causal']}条因果、+{stats['entities']}个实体、+{stats['keywords']}个关键词"
+                        "content": f"🔬 学习完成：+{stats['causal']}条因果、+{stats['entities']}个实体、+{stats['keywords']}个关键词",
+                        "type": "learning"
                     })
             
             return {'status': 'ok', 'stats': stats}
@@ -7028,7 +7201,8 @@ class UnifiedMaintainer:
                             try:
                                 agent._proactive_queue.append({
                                     "time": time.time(),
-                                    "content": f"[📄] {summary}"
+                                    "content": f"[📄] {summary}",
+                                    "type": "knowledge_organize"
                                 })
                                 stats['display'] = 1
                                 print(f"  [整理] API成功 → {summary}", flush=True)
@@ -7062,7 +7236,8 @@ class UnifiedMaintainer:
                 try:
                     agent._proactive_queue.append({
                         "time": time.time(),
-                        "content": f"[📄] Local organized {stats['relations']} knowledge connections"
+                        "content": f"[📄] Local organized {stats['relations']} knowledge connections",
+                        "type": "knowledge_organize"
                     })
                     stats['display'] = 1
                     print(f"  [整理] 本地降级 → {stats['relations']} 关联", flush=True)
@@ -7229,7 +7404,8 @@ class UnifiedMaintainer:
             if hasattr(agent, '_proactive_queue') and action:
                 agent._proactive_queue.append({
                     "time": now,
-                    "content": f"🧠 {parsed.get('self_awareness','')[:100]} → {action[:80]}"
+                    "content": f"🧠 {parsed.get('self_awareness','')[:100]} → {action[:80]}",
+                    "type": "cognition"
                 })
             
             print(f"  [认知] API成功 → {decision}({action[:60]}) | 能量{energies[-1] if energies else 0:.2f} 混沌{chaos_vals[-1] if chaos_vals else 0:.2f}", flush=True)
@@ -7425,7 +7601,8 @@ class UnifiedMaintainer:
                     if hasattr(agent, '_proactive_queue'):
                         agent._proactive_queue.append({
                             "time": time.time(),
-                            "content": topic
+                            "content": topic,
+                            "type": "active_talk"
                         })
                 agent.self_monitor.last_active_time = time.time()
         except Exception:
@@ -7493,7 +7670,7 @@ class UnifiedMaintainer:
                 report += "\n电脑状态良好，无需特殊维护。\n"
             
             if hasattr(agent, '_proactive_queue'):
-                agent._proactive_queue.append({"time": now, "content": report})
+                agent._proactive_queue.append({"time": now, "content": report, "type": "health_report"})
             print(f"[每日报告] 已推送 ({n}条数据, {len(warnings)}条警告)", flush=True)
         except Exception:
             pass
@@ -7794,7 +7971,7 @@ CPU占用Top: {d.get('top_cpu', [])}
             now = time.time()
             full_msg = f"{report}\n\n----\n(  3天深度体检 | LLM分析 | 下次: 3天后)"
             if hasattr(agent, '_proactive_queue'):
-                agent._proactive_queue.append({"time": now, "content": full_msg})
+                agent._proactive_queue.append({"time": now, "content": full_msg, "type": "deep_audit"})
             print(f"[深度体检] 完成并推送 ({len(report)}字)", flush=True)
         except Exception as e:
             print(f"[深度体检] 异常: {e}", flush=True)
@@ -9091,7 +9268,8 @@ class TrueAgent:
             if hasattr(self, '_proactive_queue'):
                 self._proactive_queue.append({
                     "time": time.time(),
-                    "content": message
+                    "content": message,
+                    "type": "active_talk"
                 })
         except Exception:
             pass
