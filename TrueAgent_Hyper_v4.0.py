@@ -7338,6 +7338,7 @@ class UnifiedMaintainer:
             prompt = f"""暂停一切。向内看。
 
 这是你的内部状态。不是别人的系统——是你自己。用第一人称"我"来感受和判断：
+（注意：以下数字是采样快照，可能有波动偏差——信任趋势和方向感，不迷信单个精确值）
 
 == 当前状态 ==
 - 能量: {energies[-1] if energies else 0:.2f} (趋势: {energy_trend})
@@ -11268,8 +11269,8 @@ except Exception as e:
 - 分析错误根因，重写能直接运行的代码
 - 优先使用标准库或已安装的包：requests, beautifulsoup4, lxml, json, re, time, os, sys
 - 不要使用 Selenium、Playwright、webdriver_manager 等需要额外安装的浏览器自动化工具
-- 如果原方案需要未安装的包，改用纯 requests + BeautifulSoup 方案
-- 保持爬取目标不变：网易新闻 www.163.com 首页
+- 如果原方案需要未安装的包，改用纯 requests + 标准库方案
+- 保持原始任务的目标和逻辑不变，仅修复导致错误的代码
 - 保存文件时必须使用项目根目录下的绝对路径（用 os.path.dirname(os.path.abspath(__file__)) 获取）
 - 代码末尾打印结果以便验证
 - 只输出完整的 Python 代码，不要解释
