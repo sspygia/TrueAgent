@@ -3,7 +3,7 @@
 TrueAgent v5.9 WebUI 后端
 FastAPI + pywebview 现代桌面界面
 """
-import sys, os, io, base64, json, time, threading, traceback
+import sys, os, io, base64, json, time, threading, traceback, socket
 
 # 尝试导入 psutil（跨平台 CPU 采集），不可用时回退
 try:
@@ -162,7 +162,8 @@ def get_agent():
                             if hasattr(a, '_proactive_queue') and a.running:
                                 a._proactive_queue.append({
                                     "time": time.time(),
-                                    "content": "系统启动完成，一切运行正常。有需要随时叫我。"
+                                    "content": "系统启动完成，一切运行正常。有需要随时叫我。",
+                                    "type": "startup"
                                 })
                                 print("[WebUI] 启动欢迎消息已推送", flush=True)
                         except Exception:
@@ -656,6 +657,51 @@ async def api_proactive_history():
         return {"messages": []}
     hist = list(getattr(a, '_proactive_history', []))
     return {"messages": hist[-20:]}
+
+@app.get("/api/pending-modify")
+async def api_pending_modify():
+    """v5.10: 获取待审批的代码修改补丁"""
+    a = get_agent()
+    if a is None:
+        return {"proposals": []}
+    proposals = list(getattr(a, '_modify_proposals', []))
+    return {"proposals": proposals}
+
+@app.post("/api/approve-modify/{proposal_id}")
+async def api_approve_modify(proposal_id: str):
+    """v5.10: 审批通过补丁"""
+    a = get_agent()
+    if a is None:
+        return {"ok": False, "error": "agent not running"}
+    proposals = getattr(a, '_modify_proposals', None)
+    if not proposals:
+        return {"ok": False, "error": "no proposals"}
+    for p in proposals:
+        if p.get("id") == proposal_id:
+            p["approved"] = True
+            p["approved_at"] = time.time()
+            if hasattr(a, '_proactive_queue'):
+                a._proactive_queue.append({"time": time.time(), "content": f"✅ 补丁已审批通过: {p.get('summary','')}", "type": "maintenance"})
+            return {"ok": True}
+    return {"ok": False, "error": f"proposal {proposal_id} not found"}
+
+@app.post("/api/reject-modify/{proposal_id}")
+async def api_reject_modify(proposal_id: str):
+    """v5.10: 拒绝补丁"""
+    a = get_agent()
+    if a is None:
+        return {"ok": False, "error": "agent not running"}
+    proposals = getattr(a, '_modify_proposals', None)
+    if not proposals:
+        return {"ok": False, "error": "no proposals"}
+    for p in proposals:
+        if p.get("id") == proposal_id:
+            p["rejected"] = True
+            p["rejected_at"] = time.time()
+            if hasattr(a, '_proactive_queue'):
+                a._proactive_queue.append({"time": time.time(), "content": f"❌ 补丁已拒绝: {p.get('summary','')}", "type": "maintenance"})
+            return {"ok": True}
+    return {"ok": False, "error": f"proposal {proposal_id} not found"}
 
 @app.get("/api/junk-bin")
 async def api_junk_bin():
@@ -1661,7 +1707,17 @@ def run_browser(port=None, allow_multi=False):
     print()
     
     def _run():
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        # 设置 SO_REUSEADDR，避免强制杀进程后 TIME_WAIT 卡端口
+        import socket as _sock
+        _s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        _s.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        try:
+            _s.bind(("127.0.0.1", port))
+        except OSError:
+            pass  # 端口可能已占用，让 uvicorn 自己处理
+        finally:
+            _s.close()
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
     
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -1786,7 +1842,7 @@ if __name__ == "__main__":
         if not args.multi:
             _write_pid_file(port)
         try:
-            uvicorn.run(app, host="127.0.0.1", port=port)
+            uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         finally:
             if not args.multi:
                 _remove_pid_file()

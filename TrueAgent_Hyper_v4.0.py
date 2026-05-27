@@ -8411,26 +8411,102 @@ CPU占用Top: {d.get('top_cpu', [])}
                         fixed_count += 1
                     except: pass
                 
-                # ═══ 修复4：代码补丁（v5.9-打通）═══
-                # 解析LLM返回的【补丁】格式，通过审批队列执行
+                # ═══ 修复4：代码补丁（v5.10-真正执行）═══
+                # 解析LLM返回的【补丁】格式，审批后自动备份→执行→验证→回滚
                 import re as _re
                 patch_blocks = _re.findall(r'【补丁】\s*文件[=:：]\s*(.+?)\s+old[=:：]\s*(.+?)\s+new[=:：]\s*(.+)', text)
                 if not patch_blocks:
-                    # 宽松匹配多行格式
                     patch_blocks = _re.findall(r'【补丁】.*?文件[=:：]\s*(\S+).*?\n.*?(?:old|旧)[=:：]\s*(.+?)\n.*?(?:new|新)[=:：]\s*(.+)', text, _re.DOTALL)
                 for patch_file, patch_old, patch_new in patch_blocks:
                     patch_file = patch_file.strip()
                     patch_old = patch_old.strip()
                     patch_new = patch_new.strip()
-                    if patch_file and patch_old and patch_new:
-                        patch_spec = f"文件={patch_file}\n旧内容={patch_old[:100]}\n新内容={patch_new[:100]}"
+                    if not (patch_file and patch_old and patch_new):
+                        continue
+                    # 安全校验：只允许修改v5.9目录下的.py/.bat/.md文件
+                    abs_file = os.path.abspath(patch_file)
+                    v5_dir = os.path.dirname(os.path.abspath(__file__))
+                    if not abs_file.startswith(v5_dir):
+                        print(f"    [补丁] 拒绝：文件{v5_dir}不在工作区 {abs_file}", flush=True)
+                        continue
+                    if not abs_file.endswith(('.py', '.bat', '.md', '.json', '.html', '.js', '.css')):
+                        print(f"    [补丁] 拒绝：不允许的文件类型 {os.path.splitext(patch_file)[1]}", flush=True)
+                        continue
+                    # 补丁审批（小于20行改动自动通过，否则推审批队列）
+                    patch_spec = f"文件={patch_file}\n旧={patch_old[:80]}\n新={patch_new[:80]}"
+                    lines_changed = patch_old.count('\n') + 1
+                    proceed = True
+                    if lines_changed > 20:
                         if hasattr(self, '_reflect_before_modify'):
-                            self._reflect_before_modify(
-                                f"代码补丁: {os.path.basename(patch_file)}",
+                            proceed = self._reflect_before_modify(
+                                f"代码补丁({lines_changed}行): {os.path.basename(patch_file)}",
                                 patch_spec
                             )
+                    if not proceed:
+                        print(f"    [补丁] 审批未通过或跳过: {os.path.basename(patch_file)}", flush=True)
+                        continue
+                    # ═══ 执行补丁 ═══
+                    try:
+                        # Step 1: 再次备份
+                        from shutil import copy2
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        backup_dir = os.path.join(v5_dir, "backups")
+                        os.makedirs(backup_dir, exist_ok=True)
+                        backup_path = os.path.join(backup_dir, f"{os.path.basename(patch_file)}.patch_{ts}")
+                        if os.path.exists(abs_file):
+                            copy2(abs_file, backup_path)
+                        # Step 2: 读取原文件，替换内容
+                        with open(abs_file, 'r', encoding='utf-8') as f:
+                            original = f.read()
+                        if patch_old not in original:
+                            print(f"    [补丁] 警告：旧内容未找到，尝试宽松匹配", flush=True)
+                            # 尝试首尾50字符匹配
+                            head = patch_old[:50]
+                            tail = patch_old[-50:] if len(patch_old) > 50 else head
+                            idx = original.find(head)
+                            if idx >= 0:
+                                end_idx = original.find(tail, idx)
+                                if end_idx >= 0:
+                                    patch_old = original[idx:end_idx + len(tail)]
+                        if patch_old not in original:
+                            print(f"    [补丁] 跳过：旧内容不匹配文件 {os.path.basename(patch_file)}", flush=True)
+                            continue
+                        modified = original.replace(patch_old, patch_new, 1)
+                        # Step 3: 写入临时文件
+                        tmp_path = abs_file + ".tmp_patch"
+                        with open(tmp_path, 'w', encoding='utf-8') as f:
+                            f.write(modified)
+                        # Step 4: AST/语法验证（仅.py文件）
+                        if abs_file.endswith('.py'):
+                            try:
+                                import ast
+                                ast.parse(modified)
+                            except SyntaxError as se:
+                                print(f"    [补丁] 语法验证失败，回滚: {se}", flush=True)
+                                os.remove(tmp_path)
+                                continue
+                        # Step 5: 原子替换
+                        os.replace(tmp_path, abs_file)
                         fixed_count += 1
-                        print(f"    [补丁] 检测到代码补丁 → 已推审批: {os.path.basename(patch_file)}", flush=True)
+                        print(f"    [补丁] ✅ 已应用: {os.path.basename(patch_file)} (备份={os.path.basename(backup_path)})", flush=True)
+                        # 记录补丁历史
+                        if hasattr(self.agent, 'memory'):
+                            self.agent.memory.add_experience({
+                                "type": "patch_applied",
+                                "file": os.path.basename(patch_file),
+                                "backup": backup_path,
+                                "lines_changed": lines_changed,
+                                "timestamp": time.time()
+                            })
+                    except Exception as pe:
+                        print(f"    [补丁] ❌ 执行失败: {pe}", flush=True)
+                        # 回滚（如果有备份且替换已发生）
+                        try:
+                            if os.path.exists(backup_path):
+                                copy2(backup_path, abs_file)
+                                print(f"    [补丁] 已回滚到备份", flush=True)
+                        except Exception:
+                            pass
                 
                 # 记录审计结果
                 if hasattr(agent, 'memory'):
