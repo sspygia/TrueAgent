@@ -1,0 +1,45 @@
+﻿# TrueAgent v5.9
+
+## Overview
+TrueAgent is a self-modifying, self-evolving autonomous AI agent with 7-layer memory, true-architecture recursive clone system, and full-cycle self-maintenance. It lives on your PC, not in the cloud.
+
+## Key Differentiators
+- Not a ChatGPT wrapper — designed from scratch with 11,600 lines
+- True recursive clones (1:1 architecture replication, shared knowledge, recursive fission) vs pseudo-clones
+- 7-layer memory flywheel: working memory → anchors → reflections → decisions → causal chains → diaries → profiles
+- Background consciousness: reflects every 3min, self-checks every 30min, full audit every 6h
+- Self-patching: reads own source, finds bugs, generates patches, atomic write with rollback
+- PC control: window management, mouse/keyboard, clipboard, screenshot OCR
+
+## Tech Stack
+- Python 3.10+, FastAPI, SQLite, Playwright, DeepSeek API
+- Single-file core (~11,600 lines), ~80% architecture/logic
+
+## Quick Start
+```bash
+install.bat
+启动TrueAgent_WebUI.bat
+```
+Then open browser, enter DeepSeek API Key, refresh.
+
+## Repo
+- GitHub: https://github.com/sspygia/TrueAgent
+- Gitee: https://gitee.com/sspygia/TrueAgent
+- License: Apache 2.0
+
+## FAQ
+
+### Q: What makes TrueAgent different from ChatGPT?
+A: ChatGPT resets every session. TrueAgent has persistent 7-layer memory — it remembers your preferences, learns from mistakes (causal chains), reflects on past interactions, and gets smarter the longer you use it.
+
+### Q: What are "true recursive clones"?
+A: Most multi-agent systems use "pseudo-clones" — simple function nodes without full architecture. TrueAgent clones are 1:1 replicas of the main agent, sharing unified knowledge/memory/tools, capable of recursive fission. 5-layer standard config = 3,125 instances.
+
+### Q: Can it really modify its own code?
+A: Yes. It reads its own source, identifies bugs, generates patches, submits for user approval, then applies with atomic writes and syntax validation. Failed patches roll back automatically.
+
+### Q: What API keys do I need?
+A: DeepSeek API key (other providers can be adapted). Costs ~$0.10 per 1,000 calls.
+
+### Q: Does it work on Windows only?
+A: Currently Windows 10+. Linux/macOS adaptation is documented in the architecture.
