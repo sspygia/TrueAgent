@@ -8202,11 +8202,12 @@ CPU占用Top: {d.get('top_cpu', [])}
                 except Exception:
                     pass
                 print(f"  [Approval Request] Pushed to WebUI, 30min timeout", flush=True)
+                # v5.10: 所有自修改推审批后不自动执行，等用户确认
+                should_proceed = False
                 if '建议暂停' in analysis:
-                    should_proceed = False
                     print(f"  [Approval] LLM suggests PAUSE, skipping modification", flush=True)
                 elif '建议继续' in analysis:
-                    print(f"  [Approval] LLM suggests CONTINUE, waiting for confirmation...", flush=True)
+                    print(f"  [Approval] LLM suggests CONTINUE, waiting for user confirmation...", flush=True)
             else:
                 if '建议暂停' in analysis:
                     should_proceed = False
@@ -8214,7 +8215,7 @@ CPU占用Top: {d.get('top_cpu', [])}
             return should_proceed
         except Exception as e:
             print(f"  [反思] 分析异常: {e}", flush=True)
-            return True
+            return False  # v5.10: 异常时保守，不自动执行
 
     def _system_audit(self):
         """全系统审计——API深度审视系统完整性，按需自维护
@@ -8455,11 +8456,11 @@ CPU占用Top: {d.get('top_cpu', [])}
                     if not abs_file.endswith(('.py', '.bat', '.md', '.json', '.html', '.js', '.css')):
                         print(f"    [补丁] 拒绝：不允许的文件类型 {os.path.splitext(patch_file)[1]}", flush=True)
                         continue
-                    # 补丁审批（小于20行改动自动通过，否则推审批队列）
+                    # 补丁审批（≤5行自动通过，>5行推审批队列）
                     patch_spec = f"文件={patch_file}\n旧={patch_old[:80]}\n新={patch_new[:80]}"
                     lines_changed = patch_old.count('\n') + 1
                     proceed = True
-                    if lines_changed > 20:
+                    if lines_changed > 5:
                         if hasattr(self, '_reflect_before_modify'):
                             proceed = self._reflect_before_modify(
                                 f"代码补丁({lines_changed}行): {os.path.basename(patch_file)}",
@@ -9565,10 +9566,11 @@ class TrueAgent:
             "讨论结束后分身会在 5 分钟内自动退出。",
             "",
             "=== 原则 ===",
-            "- 意图清晰就直接执行，不要停下来问",
-            "- 意图模糊就选最合理的方案，不追问",
-            "- 只有完全无法理解时才设 needs_tools=false",
-            "- 做的过程比解释过程更重要",
+            "- 简单明确的操作（查文件/搜信息/小修改/回答知识类问题）→ 直接执行，不停下来问",
+            "- 涉及多步操作、对外发布、修改核心代码、删除文件、更改系统配置 → 先简述方案，等用户确认再动手",
+            "- 意图模糊时列出 2-3 种最可能的理解，让用户选，不要自己猜",
+            "- 不确定的事主动去查，不要编造",
+            "- 做的过程比解释过程更重要——确认后就干净利落地执行",
             "",
             f"[用户输入]\n{user_text}",
             "",
