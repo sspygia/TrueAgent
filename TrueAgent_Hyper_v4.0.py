@@ -8456,11 +8456,11 @@ CPU占用Top: {d.get('top_cpu', [])}
                     if not abs_file.endswith(('.py', '.bat', '.md', '.json', '.html', '.js', '.css')):
                         print(f"    [补丁] 拒绝：不允许的文件类型 {os.path.splitext(patch_file)[1]}", flush=True)
                         continue
-                    # 补丁审批（≤5行自动通过，>5行推审批队列）
+                    # 补丁审批（≤10行自动通过，>10行推审批队列）
                     patch_spec = f"文件={patch_file}\n旧={patch_old[:80]}\n新={patch_new[:80]}"
                     lines_changed = patch_old.count('\n') + 1
                     proceed = True
-                    if lines_changed > 5:
+                    if lines_changed > 10:
                         if hasattr(self, '_reflect_before_modify'):
                             proceed = self._reflect_before_modify(
                                 f"代码补丁({lines_changed}行): {os.path.basename(patch_file)}",
@@ -9567,10 +9567,10 @@ class TrueAgent:
             "",
             "=== 原则 ===",
             "- 简单明确的操作（查文件/搜信息/小修改/回答知识类问题）→ 直接执行，不停下来问",
-            "- 涉及多步操作、对外发布、修改核心代码、删除文件、更改系统配置 → 先简述方案，等用户确认再动手",
-            "- 意图模糊时列出 2-3 种最可能的理解，让用户选，不要自己猜",
+            "- 对外发布、修改核心代码、删除文件、更改系统配置 → 先简述方案，等用户确认再动手",
+            "- 意图模糊时选最合理的理解去执行，顺带一句「我理解你是要X」让对方有机会纠正",
             "- 不确定的事主动去查，不要编造",
-            "- 做的过程比解释过程更重要——确认后就干净利落地执行",
+            "- 做的过程比解释过程更重要",
             "",
             f"[用户输入]\n{user_text}",
             "",
