@@ -3073,19 +3073,23 @@ class MemorySystem:
                 self._compress_working_memory()
 
     def _compress_working_memory(self):
-        self.agent.meta.log_thought("触发工作记忆压缩，开始提炼核心经验", "memory_compress")
-        sorted_mem = sorted(self.working_memory, key=lambda x: x.get("importance", 0), reverse=True)
-        keep_count = int(len(sorted_mem) * 0.2)
-        high_importance = sorted_mem[:keep_count]
-        low_importance = sorted_mem[keep_count:]
-        if low_importance:
-            summary = self._summarize_experiences(low_importance)
-            self._add_to_long_term({"type": "compressed_summary", "content": summary, "source": "working_memory_compress"})
-        self.working_memory.clear()
-        for exp in high_importance:
-            self.working_memory.append(exp)
-        self.last_compress_time = time.time()
-        self.agent.meta.log_thought(f"Compression done: kept {keep_count}, extracted {len(low_importance)} as summary", "memory_compress")
+        self._compressing = True  # v5.10: 竞态保护标志
+        try:
+            self.agent.meta.log_thought("触发工作记忆压缩，开始提炼核心经验", "memory_compress")
+            sorted_mem = sorted(self.working_memory, key=lambda x: x.get("importance", 0), reverse=True)
+            keep_count = int(len(sorted_mem) * 0.2)
+            high_importance = sorted_mem[:keep_count]
+            low_importance = sorted_mem[keep_count:]
+            if low_importance:
+                summary = self._summarize_experiences(low_importance)
+                self._add_to_long_term({"type": "compressed_summary", "content": summary, "source": "working_memory_compress"})
+            self.working_memory.clear()
+            for exp in high_importance:
+                self.working_memory.append(exp)
+            self.last_compress_time = time.time()
+            self.agent.meta.log_thought(f"Compression done: kept {keep_count}, extracted {len(low_importance)} as summary", "memory_compress")
+        finally:
+            self._compressing = False
 
     def _summarize_experiences(self, experiences: List[Dict]) -> str:
         if not experiences:
@@ -3506,16 +3510,14 @@ Output format (JSON):
         self.working_memory.append({"type": "quick_reflect", "content": quick, "timestamp": time.time()})
 
     def _apply_suggestions(self, suggestions):
-        """沙箱验证 + 范围限制 — 补丁不超限"""
+        """v5.10: 沙箱验证 + 范围限制 + 路由到反思议程"""
         for sug in suggestions:
             sug_lower = sug.lower()
             if "安全" in sug_lower:
                 old = self.agent.security.security_baseline["risk_threshold"]
                 new = min(0.4, old + 0.05)
-                # 沙箱验证：变化不超过 0.1
                 if abs(new - old) <= 0.1 and 0.2 <= new <= 0.5:
                     self.agent.security.security_baseline["risk_threshold"] = new
-                    print(f"[补丁] 安全风险阈值: {old:.2f}→{new:.2f} ✓")
                 else:
                     print(f"[补丁] 安全风险阈值变更被沙箱拦截: {old:.2f}→{new:.2f} ⛔", flush=True)
             elif "并发" in sug_lower:
@@ -3523,10 +3525,28 @@ Output format (JSON):
                 new = old - 1
                 if 2 <= new <= 8:
                     self.agent.scheduler.max_concurrency = new
-                    print(f"[补丁] 并发数: {old}→{new} ✓")
                 else:
                     print(f"[补丁] 并发变更被沙箱拦截: {old}→{new} ⛔", flush=True)
                 self.agent.scheduler.adjust_concurrency(-1)
+            # v5.10: 将其余建议路由到反思议程（联网/图谱/清理/性能/学习）
+            elif not hasattr(self, '_reflection_agenda'):
+                self._reflection_agenda = []
+            for domain in ["web", "kg", "maintain", "perf", "learn"]:
+                kws = {
+                    "web": ["联网", "爬取", "版本", "检测", "搜索", "网页"],
+                    "kg": ["图谱", "知识", "补全", "稀疏", "关系", "边"],
+                    "maintain": ["清理", "归档", "压缩", "维护", "整理"],
+                    "perf": ["性能", "优化", "加速", "慢", "延迟"],
+                    "learn": ["学习", "总结", "提炼", "训练", "练习"],
+                }
+                if any(k in sug_lower for k in kws.get(domain, [])):
+                    if not any(a.get("domain") == domain for a in self._reflection_agenda if not a.get("acknowledged")):
+                        self._reflection_agenda.append({
+                            "domain": domain,
+                            "triggered_by": [sug[:120]],
+                            "time": time.time(),
+                            "acknowledged": False,
+                        })
 
     def _save_memories(self):
         try:
@@ -3969,6 +3989,8 @@ Output format (JSON):
 
     def _process_learning_agenda(self):
         """v5.10: 处理反思议程中的学习任务（主动联网/图谱补全/性能分析）"""
+        if getattr(self, '_compressing', False):
+            return  # v5.10: 如果正在压缩，跳过避免竞态
         agenda_items = [m for m in self.working_memory if m.get("type") == "learning_agenda"]
         if not agenda_items:
             return
@@ -6554,7 +6576,7 @@ class UnifiedMaintainer:
                             issues.append(f"磁盘仅剩{disk_free_now:.1f}GB且快速下降（建议：清理临时文件）")
                         msg = f"[电脑异常] {'; '.join(issues)}"
                         if hasattr(agent, '_proactive_queue'):
-                            agent._proactive_queue.append({"time": now2, "content": msg, "type": "health_alert"})
+                            agent._push_proactive({"time": now2, "content": msg, "type": "health_alert"})
                         agent._anomaly_last_alert = now2
                         print(f"[感知] ⚠️ {msg}", flush=True)
             
@@ -6611,7 +6633,7 @@ class UnifiedMaintainer:
             if moved_total > 0:
                 msg = f"🧹 已将 {moved_total} 个旧文件移入回收站（data/.junk_bin/），可随时恢复"
                 if hasattr(self.agent, '_proactive_queue'):
-                    self.agent._proactive_queue.append({"time": time.time(), "content": msg, "type": "maintenance"})
+                    self.agent._push_proactive({"time": time.time(), "content": msg, "type": "maintenance"})
                 print(f"  [维护] {msg}", flush=True)
         except Exception:
             pass
@@ -6666,7 +6688,7 @@ class UnifiedMaintainer:
             if moved:
                 msg = f"⚠️ 磁盘紧急清理：{moved} 个文件已移入回收站（data/.junk_bin/）"
                 if hasattr(self.agent, '_proactive_queue'):
-                    self.agent._proactive_queue.append({"time": time.time(), "content": msg, "type": "maintenance"})
+                    self.agent._push_proactive({"time": time.time(), "content": msg, "type": "maintenance"})
                 print(f"  [紧急清理] {msg}", flush=True)
         except Exception:
             pass
@@ -6987,7 +7009,7 @@ class UnifiedMaintainer:
             # 推送通知到 WebUI（仅当有实质产出时）
             if stats.get('causal', 0) + stats.get('entities', 0) > 0:
                 if hasattr(agent, '_proactive_queue'):
-                    agent._proactive_queue.append({
+                    agent._push_proactive({
                         "time": time.time(),
                         "content": f"🔬 学习完成：+{stats['causal']}条因果、+{stats['entities']}个实体、+{stats['keywords']}个关键词",
                         "type": "learning"
@@ -7199,7 +7221,7 @@ class UnifiedMaintainer:
                         summary = org.get('summary','')
                         if summary and hasattr(agent, '_proactive_queue'):
                             try:
-                                agent._proactive_queue.append({
+                                agent._push_proactive({
                                     "time": time.time(),
                                     "content": f"[📄] {summary}",
                                     "type": "knowledge_organize"
@@ -7234,7 +7256,7 @@ class UnifiedMaintainer:
             # 摘要推送
             if hasattr(agent, '_proactive_queue') and stats.get('relations',0) > 0:
                 try:
-                    agent._proactive_queue.append({
+                    agent._push_proactive({
                         "time": time.time(),
                         "content": f"[📄] Local organized {stats['relations']} knowledge connections",
                         "type": "knowledge_organize"
@@ -7402,7 +7424,7 @@ class UnifiedMaintainer:
             
             # 推送到主动消息队列
             if hasattr(agent, '_proactive_queue') and action:
-                agent._proactive_queue.append({
+                agent._push_proactive({
                     "time": now,
                     "content": f"🧠 {parsed.get('self_awareness','')[:100]} → {action[:80]}",
                     "type": "cognition"
@@ -7599,7 +7621,7 @@ class UnifiedMaintainer:
                     agent._active_talk_count += 1
                     # 推送到 WebUI 队列（如有）
                     if hasattr(agent, '_proactive_queue'):
-                        agent._proactive_queue.append({
+                        agent._push_proactive({
                             "time": time.time(),
                             "content": topic,
                             "type": "active_talk"
@@ -7670,7 +7692,7 @@ class UnifiedMaintainer:
                 report += "\n电脑状态良好，无需特殊维护。\n"
             
             if hasattr(agent, '_proactive_queue'):
-                agent._proactive_queue.append({"time": now, "content": report, "type": "health_report"})
+                agent._push_proactive({"time": now, "content": report, "type": "health_report"})
             print(f"[每日报告] 已推送 ({n}条数据, {len(warnings)}条警告)", flush=True)
         except Exception:
             pass
@@ -7971,7 +7993,7 @@ CPU占用Top: {d.get('top_cpu', [])}
             now = time.time()
             full_msg = f"{report}\n\n----\n(  3天深度体检 | LLM分析 | 下次: 3天后)"
             if hasattr(agent, '_proactive_queue'):
-                agent._proactive_queue.append({"time": now, "content": full_msg, "type": "deep_audit"})
+                agent._push_proactive({"time": now, "content": full_msg, "type": "deep_audit"})
             print(f"[深度体检] 完成并推送 ({len(report)}字)", flush=True)
         except Exception as e:
             print(f"[深度体检] 异常: {e}", flush=True)
@@ -8131,7 +8153,7 @@ CPU占用Top: {d.get('top_cpu', [])}
             should_proceed = True
             if hasattr(agent, '_proactive_queue'):
                 approval_msg = f"[!] **Self-modification request:** {change_desc}\n\n**Analysis:**\n{analysis[:300]}\n\n[!] Auto-decide in 30min if no response"
-                agent._proactive_queue.append({
+                agent._push_proactive({
                     "time": time.time(),
                     "type": "approval_request",
                     "content": approval_msg,
@@ -8674,6 +8696,8 @@ class TrueAgent:
         self.evolution_focus = ["security", "cognition", "scheduler", "knowledge"]
         self.running = False
         self.lock = threading.RLock()
+        self._proactive_lock = threading.Lock()  # v5.10: 主动消息队列线程安全
+        self._proactive_queue = []
         self._user_processing = False  # 标志：用户正在对话中，后台线程禁止抢 API
         self.conversation_history = []  # 对话历史 [{"role":"user"/"assistant", "content":"..."}]
         # 断线恢复：加载上次会话
@@ -8936,6 +8960,18 @@ class TrueAgent:
         if added > 0:
             self.meta.log_thought(f"Built-in self-cognition knowledge: added {added} relationships", "self_knowledge_inject")
             self.knowledge_graph.save()
+
+    def _push_proactive(self, msg: dict):
+        """v5.10: 线程安全推送主动消息到队列"""
+        with self._proactive_lock:
+            self._proactive_queue.append(msg)
+
+    def _drain_proactive(self) -> list:
+        """v5.10: 线程安全取出并清空主动消息队列"""
+        with self._proactive_lock:
+            msgs = list(self._proactive_queue)
+            self._proactive_queue.clear()
+            return msgs
 
     def _record_stats_snapshot(self):
         """记录当前_stats快照到时间线（含时间戳），供趋势分析使用"""
@@ -9342,7 +9378,7 @@ class TrueAgent:
         # 同时也推送到 WebUI 队列
         try:
             if hasattr(self, '_proactive_queue'):
-                self._proactive_queue.append({
+                self._push_proactive({
                     "time": time.time(),
                     "content": message,
                     "type": "active_talk"

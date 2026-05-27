@@ -144,6 +144,7 @@ def get_agent():
                     agent._agent_port = int(os.environ.get('TRUEAGENT_PORT') or str(getattr(globals(), '_agent_port_override', port)))
                     agent._start_time = time.time()
                     agent._proactive_queue = []  # 主动消息队列
+                    agent._proactive_lock = threading.Lock()  # v5.10: 队列锁
                     agent._stop_requested = False  # 停止标志
                     agent._modify_proposals = []  # 修改提案队列
                     agent._trend_history = _load_trend_history() or []     # 趋势历史数据（从磁盘恢复 + 图表用）
@@ -159,8 +160,8 @@ def get_agent():
                         import time
                         time.sleep(30)
                         try:
-                            if hasattr(a, '_proactive_queue') and a.running:
-                                a._proactive_queue.append({
+                            if hasattr(a, '_push_proactive') and a.running:
+                                a._push_proactive({
                                     "time": time.time(),
                                     "content": "系统启动完成，一切运行正常。有需要随时叫我。",
                                     "type": "startup"
@@ -611,13 +612,11 @@ async def api_stop():
 
 @app.get("/api/proactive")
 async def api_proactive():
-    """获取管家主动发起的消息（去重+过滤刷屏消息）"""
+    """v5.10: 线程安全获取主动消息"""
     a = get_agent()
     if a is None:
         return {"messages": []}
-    msgs = list(getattr(a, '_proactive_queue', []))
-    if msgs:
-        a._proactive_queue.clear()
+    msgs = a._drain_proactive() if hasattr(a, '_drain_proactive') else list(getattr(a, '_proactive_queue', []))
     
     # 去重：相同内容的消息只保留一条
     seen = set()
@@ -680,8 +679,8 @@ async def api_approve_modify(proposal_id: str):
         if p.get("id") == proposal_id:
             p["approved"] = True
             p["approved_at"] = time.time()
-            if hasattr(a, '_proactive_queue'):
-                a._proactive_queue.append({"time": time.time(), "content": f"✅ 补丁已审批通过: {p.get('summary','')}", "type": "maintenance"})
+            if hasattr(a, '_push_proactive'):
+                a._push_proactive({"time": time.time(), "content": f"✅ 补丁已审批通过: {p.get('summary','')}", "type": "maintenance"})
             return {"ok": True}
     return {"ok": False, "error": f"proposal {proposal_id} not found"}
 
@@ -698,8 +697,8 @@ async def api_reject_modify(proposal_id: str):
         if p.get("id") == proposal_id:
             p["rejected"] = True
             p["rejected_at"] = time.time()
-            if hasattr(a, '_proactive_queue'):
-                a._proactive_queue.append({"time": time.time(), "content": f"❌ 补丁已拒绝: {p.get('summary','')}", "type": "maintenance"})
+            if hasattr(a, '_push_proactive'):
+                a._push_proactive({"time": time.time(), "content": f"❌ 补丁已拒绝: {p.get('summary','')}", "type": "maintenance"})
             return {"ok": True}
     return {"ok": False, "error": f"proposal {proposal_id} not found"}
 
@@ -777,8 +776,8 @@ async def api_trigger_proactive(request: Request):
     except Exception:
         pass
     try:
-        q = getattr(a, '_proactive_queue', [])
-        q.append({"time": __import__('time').time(), "content": content})
+        if hasattr(a, '_push_proactive'):
+            a._push_proactive({"time": __import__('time').time(), "content": content})
         print(f"[WebUI] 手动触发主动消息: {content[:50]}", flush=True)
         return {"success": True, "message": "已推送"}
     except Exception as e:
@@ -973,7 +972,7 @@ async def api_modify_decision(request: Request):
                 p["decision"] = decision
                 a._modify_proposals.pop(i)
                 msg = f"{'[OK] 已批准' if decision=='approve' else '[X] 已拒绝'}: {p.get('summary','?')}"
-                a._proactive_queue.append({
+                a._push_proactive({
                     "time": time.time(), "content": msg, "type": "approval_result"
                 })
                 if decision == "approve":
@@ -1099,8 +1098,8 @@ async def api_notify(request: Request):
         content = data.get("content", "")
         source = data.get("from", "unknown")
         a = get_agent()
-        if a and hasattr(a, '_proactive_queue'):
-            a._proactive_queue.append({
+        if a and hasattr(a, '_push_proactive'):
+            a._push_proactive({
                 "time": time.time(),
                 "content": f"📢 {source} 提到你了: {content[:100]}"
             })
